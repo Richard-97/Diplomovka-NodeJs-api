@@ -1,0 +1,115 @@
+
+var app = require('../app');
+var http = require('http');
+
+var port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+
+var server = http.createServer(app);
+const io = require('socket.io')(server);
+
+// Google Cloud
+const speech = require('@google-cloud/speech');
+const speechClient = new speech.SpeechClient(); // Creates a client
+
+
+
+server.listen(port);
+console.log(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+// =========================== SOCKET.IO ================================ //
+io.on('connection', function(client) {
+  console.log('Client Connected to server');
+  let recognizeStream = null;
+
+  client.on('join', function(data) {
+    client.emit('messages', 'Socket Connected to Server');
+  });
+
+  client.on('messages', function(data) {
+    client.emit('broad', data);
+  });
+
+  client.on('startGoogleCloudStream', function(data) {
+    startRecognitionStream(this, data);
+  });
+
+  client.on('endGoogleCloudStream', function(data) {
+    stopRecognitionStream();
+  });
+
+  client.on('binaryData', function(data) {
+    // console.log(data); //log binary data
+    if (recognizeStream !== null) {
+      recognizeStream.write(data);
+    }
+  });
+
+  function startRecognitionStream(client, data) {
+    recognizeStream = speechClient
+      .streamingRecognize(request)
+      .on('error', err => console.log('eeror', err))
+      .on('data', data => {
+        process.stdout.write(
+          data.results[0] && data.results[0].alternatives[0]
+            ? `Transcription: ${data.results[0].alternatives[0].transcript}\n`
+            : `\n\nReached transcription time limit, press Ctrl+C\n`
+        );
+        client.emit('speechData', data);
+
+        // if end of utterance, let's restart stream
+        // this is a small hack. After 65 seconds of silence, the stream will still throw an error for speech length limit
+        if (data.results[0] && data.results[0].isFinal) {
+          stopRecognitionStream();
+          startRecognitionStream(client);
+          // console.log('restarted stream serverside');
+        }
+      });
+  }
+
+  function stopRecognitionStream() {
+    if (recognizeStream) {
+      recognizeStream.end();
+    }
+    recognizeStream = null;
+  }
+});
+
+// =========================== GOOGLE CLOUD SETTINGS ================================ //
+
+// The encoding of the audio file, e.g. 'LINEAR16'
+// The sample rate of the audio file in hertz, e.g. 16000
+// The BCP-47 language code to use, e.g. 'en-US'
+const encoding = 'LINEAR16';
+const sampleRateHertz = 16000;
+const languageCode = 'sk-SK'; //en-US
+
+const request = {
+  config: {
+    encoding: encoding,
+    sampleRateHertz: sampleRateHertz,
+    languageCode: languageCode,
+    profanityFilter: false,
+    enableWordTimeOffsets: true
+  },
+  interimResults: true // If you want interim results, set this to true
+};
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
